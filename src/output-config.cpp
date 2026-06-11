@@ -242,7 +242,7 @@ void SaveMultiOutputConfig() {
     auto profiledir = obs_frontend_get_current_profile_path();
     if (profiledir) {
         std::string filename = profiledir;
-        filename += "/obs-multi-rtmp.json";
+        filename += "/kxtsune-obs.json";
         auto content = SaveMultiOutputConfig(GlobalMultiOutputConfig());
         os_quick_write_utf8_file_safe(filename.c_str(), content.c_str(), content.size(), true, "tmp", "bak");
         blog(LOG_INFO, TAG "Save config into %s", filename.c_str());
@@ -256,7 +256,7 @@ bool LoadMultiOutputConfig() {
     bool ret = false;
     if (profiledir) {
         std::string filename = profiledir;
-        filename += "/obs-multi-rtmp.json";
+        filename += "/kxtsune-obs.json";
         auto content = os_quick_read_utf8_file(filename.c_str());
         if (content) {
             GlobalMultiOutputConfig() = LoadMultiOutputConfig(content);

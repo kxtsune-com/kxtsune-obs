@@ -38,6 +38,13 @@ if(ENABLE_QT)
   )
 endif()
 
+target_compile_options(
+  ${CMAKE_PROJECT_NAME}
+  PRIVATE
+    -Wno-deprecated-literal-operator
+    -Wno-inconsistent-missing-override
+)
+
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
   ./src/pch.h
   ./src/obs-multi-rtmp.h

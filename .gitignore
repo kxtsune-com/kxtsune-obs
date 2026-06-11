@@ -15,6 +15,7 @@
 !CMakePresets.json
 !LICENSE
 !README.md
+!BuildInstructions.md
 
 # Exclude lock files
 *.lock.json
@@ -24,3 +25,6 @@
 
 # Exclude CMake build number cache
 /cmake/.CMakeBuildNumber
+
+# local/dev directories
+.dev.local

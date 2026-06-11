@@ -1,4 +1,4 @@
-﻿#include "pch.h"
+#include "pch.h"
 
 #include <list>
 #include <regex>
@@ -14,7 +14,7 @@
 #include <Windows.h>
 #endif
 
-#define ConfigSection "obs-multi-rtmp"
+#define ConfigSection "kxtsune-obs"
 
 static class GlobalServiceImpl : public GlobalService
 {
@@ -441,7 +441,7 @@ private:
 };
 
 OBS_DECLARE_MODULE()
-OBS_MODULE_USE_DEFAULT_LOCALE("obs-multi-rtmp", "en-US")
+OBS_MODULE_USE_DEFAULT_LOCALE("kxtsune-obs", "en-US")
 OBS_MODULE_AUTHOR("雷鳴 (@sorayukinoyume)")
 
 bool obs_module_load()
@@ -454,8 +454,8 @@ bool obs_module_load()
     });
 
     auto dock = new MultiOutputWidget();
-    dock->setObjectName("obs-multi-rtmp-dock");
-    if (!obs_frontend_add_dock_by_id("obs-multi-rtmp-dock", obs_module_text("Title"), dock))
+	dock->setObjectName("kxtsune-obs-dock");
+	if (!obs_frontend_add_dock_by_id("kxtsune-obs-dock", obs_module_text("Title"), dock))
     {
         delete dock;
         return false;

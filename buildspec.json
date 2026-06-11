@@ -33,10 +33,10 @@
     },
     "platformConfig": {
         "macos": {
-            "bundleId": "net.sorayuki.obs-multi-rtmp"
+            "bundleId": "com.kxtsune.kxtsune-obs"
         }
     },
-    "name": "obs-multi-rtmp",
+    "name": "kxtsune-obs",
     "version": "0.7.4.0",
     "author": "SoraYuki",
     "website": "https://github.com/sorayuki",
