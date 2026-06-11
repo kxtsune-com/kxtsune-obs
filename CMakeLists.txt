@@ -41,8 +41,8 @@ endif()
 target_compile_options(
   ${CMAKE_PROJECT_NAME}
   PRIVATE
-    -Wno-deprecated-literal-operator
-    -Wno-inconsistent-missing-override
+    $<$<NOT:$<C_COMPILER_ID:MSVC>>:-Wno-deprecated-literal-operator>
+    $<$<NOT:$<C_COMPILER_ID:MSVC>>:-Wno-inconsistent-missing-override>
 )
 
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
