@@ -19,18 +19,10 @@ MultiOutputConfig& GlobalMultiOutputConfig()
 
 
 static nlohmann::json SaveTarget(OutputTargetConfig& config) {
+    // Only persist user-configurable fields; everything else is hardcoded.
     nlohmann::json json;
-    json["id"] = config.id;
-    json["name"] = config.name;
-    json["protocol"] = config.protocol;
-    json["service-param"] = config.serviceParam;
-    json["output-param"] = config.outputParam;
-    json["sync-start"] = config.syncStart;
-    json["sync-stop"] = config.syncStop;
-    if (config.videoConfig.has_value())
-        json["video-config"] = *config.videoConfig;
-    if (config.audioConfig.has_value())
-        json["audio-config"] = *config.audioConfig;
+    json["stream-key"] = config.streamKey;
+    json["enabled"] = config.enabled;
     return json;
 }
 
@@ -73,43 +65,14 @@ static nlohmann::json SaveAudioConfig(AudioEncoderConfig& config) {
 }
 
 static std::string SaveMultiOutputConfig(MultiOutputConfig& config) {
+    // Only save the user-configurable fields for the single fixed target.
     nlohmann::json json;
-
-    std::unordered_set<std::string> videoconfig_in_use;
-    std::unordered_set<std::string> audioconfig_in_use;
-
-    int target_count = 0, videocfg_count = 0, audiocfg_count = 0;
-
-    nlohmann::json targets(nlohmann::json::value_t::array);
-    for(auto& target: config.targets) {
-        targets.push_back(SaveTarget(*target));
-        if (target->videoConfig.has_value())
-            videoconfig_in_use.insert(*target->videoConfig);
-        if (target->audioConfig.has_value())
-            audioconfig_in_use.insert(*target->audioConfig);
-        ++target_count;
+    if (!config.targets.empty()) {
+        auto& target = *config.targets.front();
+        json["stream-key"] = target.streamKey;
+        json["enabled"] = target.enabled;
     }
-
-    nlohmann::json video_configs(nlohmann::json::value_t::array);
-    for(auto& video_config: config.videoConfig) {
-        if (videoconfig_in_use.find(video_config->id) != videoconfig_in_use.end())
-            video_configs.push_back(SaveVideoConfig(*video_config));
-        ++videocfg_count;
-    }
-
-    nlohmann::json audio_configs(nlohmann::json::value_t::array);
-    for(auto& audio_config: config.audioConfig) {
-        if (audioconfig_in_use.find(audio_config->id) != audioconfig_in_use.end())
-            audio_configs.push_back(SaveAudioConfig(*audio_config));
-        ++audiocfg_count;
-    }
-
-    json["targets"] = targets;
-    json["video_configs"] = video_configs;
-    json["audio_configs"] = audio_configs;
-
-    blog(LOG_INFO, TAG "Save %d targets, %d video configs, %d audio configs", target_count, videocfg_count, audiocfg_count);
-
+    blog(LOG_INFO, TAG "Saved kxtsune config");
     return json.dump();
 }
 
@@ -252,23 +215,53 @@ void SaveMultiOutputConfig() {
 
 
 bool LoadMultiOutputConfig() {
+    // Always rebuild the fixed target from hardcoded values, then overlay
+    // user-configurable fields (streamKey, enabled) from the saved JSON file.
+    auto& global = GlobalMultiOutputConfig();
+    global = {};
+
+    auto target = std::make_shared<OutputTargetConfig>();
+    target->id = "kxtsune-ingest";
+    target->name = "kxtsune-ingest";
+    target->protocol = "RTMP";
+    target->syncStart = true;
+    target->syncStop = true;
+    target->serviceParam["server"] = "rtmps://ingest.kxtsune.com/live";
+    // streamKey starts empty; will be filled from saved config below
+    target->serviceParam["key"] = "";
+    target->streamKey = "";
+    target->enabled = false;
+    global.targets.emplace_back(target);
+
+    // Try to read previously saved user settings
     auto profiledir = obs_frontend_get_current_profile_path();
-    bool ret = false;
     if (profiledir) {
         std::string filename = profiledir;
         filename += "/kxtsune-obs.json";
         auto content = os_quick_read_utf8_file(filename.c_str());
         if (content) {
-            GlobalMultiOutputConfig() = LoadMultiOutputConfig(content);
+            try {
+                auto json = nlohmann::json::parse(content);
+                auto streamKey = GetJsonField<std::string>(json, "stream-key").value_or("");
+                auto enabled   = GetJsonField<bool>(json, "enabled").value_or(false);
+                target->streamKey = streamKey;
+                target->enabled   = enabled;
+                target->serviceParam["key"] = streamKey;
+                blog(LOG_INFO, TAG "Loaded user config: enabled=%s key=%s",
+                    enabled ? "true" : "false",
+                    streamKey.empty() ? "(empty)" : "(set)");
+            }
+            catch (const std::exception& e) {
+                blog(LOG_ERROR, TAG "Failed to parse kxtsune-obs.json: %s", e.what());
+            }
             bfree(content);
-            ret = true;
-            blog(LOG_INFO, TAG "Load config from %s", filename.c_str());
         } else {
-            blog(LOG_INFO, TAG "Load config from %s failed", filename.c_str());
+            blog(LOG_INFO, TAG "No saved config found, using defaults");
         }
+        bfree(profiledir);
     }
-    bfree(profiledir);
-    return ret;
+
+    return true;
 }
 
 

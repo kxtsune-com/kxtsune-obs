@@ -13,6 +13,8 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QGridLayout>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
 #include <QEvent>
 #include <QThread>
 #include <QTabWidget>

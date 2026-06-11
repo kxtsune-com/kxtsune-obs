@@ -4,776 +4,533 @@
 #include <optional>
 #include <tuple>
 #include "push-widget.h"
-#include "edit-widget.h"
 #include "output-config.h"
 #include "protocols.h"
+#include "obs-multi-rtmp.h"
 
 #include "obs.hpp"
 
-class IOBSOutputEventHanlder
+class IOBSOutputEventHandler
 {
 public:
     virtual void OnStarting() {}
     static void OnOutputStarting(void* x, calldata_t*)
     {
-        auto thiz = static_cast<IOBSOutputEventHanlder*>(x);
-        thiz->OnStarting();
+        static_cast<IOBSOutputEventHandler*>(x)->OnStarting();
     }
 
     virtual void OnStarted() {}
     static void OnOutputStarted(void* x, calldata_t*)
     {
-        auto thiz = static_cast<IOBSOutputEventHanlder*>(x);
-        thiz->OnStarted();
+        static_cast<IOBSOutputEventHandler*>(x)->OnStarted();
     }
 
     virtual void OnStopping() {}
     static void OnOutputStopping(void* x, calldata_t*)
     {
-        auto thiz = static_cast<IOBSOutputEventHanlder*>(x);
-        thiz->OnStopping();
+        static_cast<IOBSOutputEventHandler*>(x)->OnStopping();
     }
-   
-    virtual void OnStopped(int) {}
+
+    virtual void OnStopped(int /*code*/) {}
     static void OnOutputStopped(void* x, calldata_t* param)
     {
-        auto thiz = static_cast<IOBSOutputEventHanlder*>(x);
-        thiz->OnStopped(calldata_int(param, "code"));
+        static_cast<IOBSOutputEventHandler*>(x)->OnStopped(calldata_int(param, "code"));
     }
 
     virtual void OnReconnect() {}
     static void OnOutputReconnect(void* x, calldata_t*)
     {
-        auto thiz = static_cast<IOBSOutputEventHanlder*>(x);
-        thiz->OnReconnect();
+        static_cast<IOBSOutputEventHandler*>(x)->OnReconnect();
     }
 
     virtual void OnReconnected() {}
     static void OnOutputReconnected(void* x, calldata_t*)
     {
-        auto thiz = static_cast<IOBSOutputEventHanlder*>(x);
-        thiz->OnReconnected();
+        static_cast<IOBSOutputEventHandler*>(x)->OnReconnected();
     }
 
     virtual void onDeactive() {}
     static void OnOutputDeactive(void* x, calldata_t*)
     {
-        auto thiz = static_cast<IOBSOutputEventHanlder*>(x);
-        thiz->onDeactive();
+        static_cast<IOBSOutputEventHandler*>(x)->onDeactive();
     }
 
     void SetMeAsHandler(obs_output_t* output)
     {
-        auto outputSignal = obs_output_get_signal_handler(output);
-        if (outputSignal)
-        {
-            signal_handler_connect(outputSignal, "starting", &IOBSOutputEventHanlder::OnOutputStarting, this);
-            signal_handler_connect(outputSignal, "start", &IOBSOutputEventHanlder::OnOutputStarted, this);
-            signal_handler_connect(outputSignal, "reconnect", &IOBSOutputEventHanlder::OnOutputReconnect, this);
-            signal_handler_connect(outputSignal, "reconnect_success", &IOBSOutputEventHanlder::OnOutputReconnected, this);
-            signal_handler_connect(outputSignal, "stopping", &IOBSOutputEventHanlder::OnOutputStopping, this);
-            signal_handler_connect(outputSignal, "deactivate", &IOBSOutputEventHanlder::OnOutputDeactive, this);
-            signal_handler_connect(outputSignal, "stop", &IOBSOutputEventHanlder::OnOutputStopped, this);
-        }
+        auto sig = obs_output_get_signal_handler(output);
+        if (!sig) return;
+        signal_handler_connect(sig, "starting",         &OnOutputStarting,   this);
+        signal_handler_connect(sig, "start",            &OnOutputStarted,    this);
+        signal_handler_connect(sig, "reconnect",        &OnOutputReconnect,  this);
+        signal_handler_connect(sig, "reconnect_success",&OnOutputReconnected,this);
+        signal_handler_connect(sig, "stopping",         &OnOutputStopping,   this);
+        signal_handler_connect(sig, "deactivate",       &OnOutputDeactive,   this);
+        signal_handler_connect(sig, "stop",             &OnOutputStopped,    this);
     }
 
     void DisconnectSignals(obs_output_t* output)
     {
-        auto outputSignal = obs_output_get_signal_handler(output);
-        if (outputSignal)
-        {
-            signal_handler_disconnect(outputSignal, "starting", &IOBSOutputEventHanlder::OnOutputStarting, this);
-            signal_handler_disconnect(outputSignal, "start", &IOBSOutputEventHanlder::OnOutputStarted, this);
-            signal_handler_disconnect(outputSignal, "reconnect", &IOBSOutputEventHanlder::OnOutputReconnect, this);
-            signal_handler_disconnect(outputSignal, "reconnect_success", &IOBSOutputEventHanlder::OnOutputReconnected, this);
-            signal_handler_disconnect(outputSignal, "stopping", &IOBSOutputEventHanlder::OnOutputStopping, this);
-            signal_handler_disconnect(outputSignal, "deactivate", &IOBSOutputEventHanlder::OnOutputDeactive, this);
-            signal_handler_disconnect(outputSignal, "stop", &IOBSOutputEventHanlder::OnOutputStopped, this);
-        }
+        auto sig = obs_output_get_signal_handler(output);
+        if (!sig) return;
+        signal_handler_disconnect(sig, "starting",         &OnOutputStarting,   this);
+        signal_handler_disconnect(sig, "start",            &OnOutputStarted,    this);
+        signal_handler_disconnect(sig, "reconnect",        &OnOutputReconnect,  this);
+        signal_handler_disconnect(sig, "reconnect_success",&OnOutputReconnected,this);
+        signal_handler_disconnect(sig, "stopping",         &OnOutputStopping,   this);
+        signal_handler_disconnect(sig, "deactivate",       &OnOutputDeactive,   this);
+        signal_handler_disconnect(sig, "stop",             &OnOutputStopped,    this);
     }
 };
 
 
-class PushWidgetImpl : public PushWidget, public IOBSOutputEventHanlder
+class PushWidgetImpl : public QObject, public PushWidget, public IOBSOutputEventHandler
 {
+    Q_OBJECT
+    // PushWidget is a plain interface (no QObject); QObject comes first.
+
     std::string targetid_;
     OutputTargetConfigPtr config_;
-
-    QPushButton* btn_ = 0;
-    QLabel* name_ = 0;
-    QLabel* msg_ = 0;
 
     using clock = std::chrono::steady_clock;
     clock::time_point begin_time_;
     clock::time_point last_info_time_;
     uint64_t total_frames_ = 0;
     uint64_t total_bytes_ = 0;
-    QTimer* timer_ = 0;
+    QTimer* timer_ = nullptr;
 
-    QPushButton* edit_btn_ = 0;
-    QPushButton* remove_btn_ = 0;
-
-    obs_output_t* output_ = 0;
+    obs_output_t* output_ = nullptr;
     bool using_main_video_encoder_ = false;
     bool using_main_audio_encoder_ = false;
-    obs_view_t* scene_view_ = 0;
+    obs_view_t* scene_view_ = nullptr;
     bool isUseDelay_ = false;
 
-    QPushButton* GetDeleteButton() {
-        return remove_btn_;
+    StatusCallback statusCallback_;
+
+    void NotifyStatus(const std::string& msg) {
+        if (statusCallback_)
+            statusCallback_(msg);
     }
+
+    // ── service ──────────────────────────────────────────────────────────────
 
     bool PrepareOutputService()
     {
-        if (!output_) {
-            blog(LOG_ERROR, TAG "Prepare output service before output object is created.");
-            return false;
-        }
-        
+        if (!output_) return false;
         ReleaseOutputService();
-        
+
         auto conf = obs_data_create_from_json(config_->serviceParam.dump().c_str());
+        if (!conf) return false;
 
         auto protocolInfo = GetProtocolInfos()->GetInfo(config_->protocol.c_str());
-        assert(protocolInfo);
         if (!protocolInfo) {
-        	blog(LOG_ERROR, TAG "Invalid protocol \"%s\", maybe broken config file.", config_->protocol.c_str());
-        	return false;
+            blog(LOG_ERROR, TAG "Invalid protocol \"%s\"", config_->protocol.c_str());
+            obs_data_release(conf);
+            return false;
         }
-        auto service_id = protocolInfo->serviceId;
 
-        if (!conf)
-            return false;
-        
-        auto service = obs_service_create(service_id, "multi-output-service", conf, nullptr);
+        auto service = obs_service_create(protocolInfo->serviceId, "multi-output-service", conf, nullptr);
         obs_data_release(conf);
-        if (!service)
-            return false;
+        if (!service) return false;
         obs_output_set_service(output_, service);
-
         return true;
     }
 
-
     bool ReleaseOutputService()
     {
-        if (!output_)
-            return true;
-
-        if (obs_output_active(output_)) {
-            return false;
-        }
-        
+        if (!output_) return true;
+        if (obs_output_active(output_)) return false;
         auto service = obs_output_get_service(output_);
-        if (service)
-        {
+        if (service) {
             obs_output_set_service(output_, nullptr);
             obs_service_release(service);
         }
         return true;
     }
 
+    // ── encoder source ────────────────────────────────────────────────────────
 
-    bool PrepareEncoderSource() {
-        if (!output_) {
-            blog(LOG_ERROR, TAG "Prepare output scene before output object is created.");
-            return false;
-        }
+    bool PrepareEncoderSource()
+    {
+        if (!output_) return false;
 
         if (!using_main_video_encoder_) {
             auto venc = obs_output_get_video_encoder(output_);
-            if (!venc) {
-                blog(LOG_ERROR, TAG "Prepare output scene before encoder is created.");
-                return false;
-            }
-            auto videoConfig = FindById(GlobalMultiOutputConfig().videoConfig, config_->videoConfig.value_or(""));
-
+            if (!venc) return false;
+            auto videoConfig = FindById(GlobalMultiOutputConfig().videoConfig,
+                                        config_->videoConfig.value_or(""));
             if (!videoConfig || !videoConfig->outputScene.has_value()) {
                 obs_encoder_set_video(venc, obs_get_video());
             } else {
                 auto sceneName = *videoConfig->outputScene;
                 OBSSourceAutoRelease scene = obs_get_source_by_name(sceneName.c_str());
-                if (scene == nullptr) {
-                    blog(LOG_ERROR, TAG "Output scene is not found.");
+                if (!scene) {
+                    blog(LOG_ERROR, TAG "Output scene not found.");
                     return false;
                 }
                 ReleaseOutputSceneView();
-
                 scene_view_ = obs_view_create();
                 obs_view_set_source(scene_view_, 0, scene);
                 obs_source_inc_active(scene);
-                auto scene_video = obs_view_add(scene_view_);
-                obs_encoder_set_video(venc, scene_video);
+                obs_encoder_set_video(venc, obs_view_add(scene_view_));
             }
         }
 
         if (!using_main_audio_encoder_) {
             auto aenc = obs_output_get_audio_encoder(output_, 0);
-            if (!aenc) {
-                blog(LOG_ERROR, TAG "Prepare output scene before encoder is created.");
-                return false;
-            }
+            if (!aenc) return false;
             obs_encoder_set_audio(aenc, obs_get_audio());
 
-            // Set other audio tracks
-            auto audioConfig = FindById(GlobalMultiOutputConfig().audioConfig, config_->audioConfig.value_or(""));
+            auto audioConfig = FindById(GlobalMultiOutputConfig().audioConfig,
+                                         config_->audioConfig.value_or(""));
             if (audioConfig) {
                 for (auto& track : audioConfig->audioTracks) {
                     auto enc = obs_output_get_audio_encoder(output_, track->output_track);
-                    if (enc) {
-                        obs_encoder_set_audio(enc, obs_get_audio());
-                    }
+                    if (enc) obs_encoder_set_audio(enc, obs_get_audio());
                 }
             }
         }
-        
         return true;
     }
 
-
-    bool ReleaseOutputSceneView() {
-        if (!scene_view_)
-            return true;
-
+    bool ReleaseOutputSceneView()
+    {
+        if (!scene_view_) return true;
         obs_view_remove(scene_view_);
         OBSSourceAutoRelease source = obs_view_get_source(scene_view_, 0);
-        if (source) {
-            obs_source_dec_active(source);
-        }
+        if (source) obs_source_dec_active(source);
         obs_view_set_source(scene_view_, 0, nullptr);
         obs_view_destroy(scene_view_);
         scene_view_ = nullptr;
-
         return true;
     }
 
+    // ── encoder helpers ───────────────────────────────────────────────────────
 
     std::string VideoEncoderName() {
         return "multi-rtmp-venc" + config_->videoConfig.value_or("");
     }
-
     std::string AudioEncoderName(int track) {
         return "multi-rtmp-aenc" + config_->audioConfig.value_or("") + "-track-idx-" + std::to_string(track);
     }
 
-    std::optional<std::tuple<int, int>> ParseResolution(const std::optional<std::string>& res) {
-        if (!res.has_value())
-            return std::nullopt;
-        std::regex res_pattern(R"__(\s*(\d{1,5})\s*x\s*(\d{1,5})\s*)__");
-        std::smatch match;
-        if (std::regex_match(*res, match, res_pattern))
-        {
-            auto width = std::stoi(match[1].str());
-            auto height = std::stoi(match[2].str());
-            return {{ width, height }};
-        }
-
+    std::optional<std::tuple<int,int>> ParseResolution(const std::optional<std::string>& res) {
+        if (!res.has_value()) return std::nullopt;
+        std::regex pat(R"__(\s*(\d{1,5})\s*x\s*(\d{1,5})\s*)__");
+        std::smatch m;
+        if (std::regex_match(*res, m, pat))
+            return {{ std::stoi(m[1]), std::stoi(m[2]) }};
         return std::nullopt;
     }
 
-    OBSEncoder GetVideoEncoder() {
+    OBSEncoder GetVideoEncoder()
+    {
         auto config_id = config_->videoConfig.value_or(OBS_STREAMING_ENC_PLACEHOLDER);
-        if (config_id == "" || config_id == OBS_STREAMING_ENC_PLACEHOLDER) {
-            OBSOutputAutoRelease stream_output = obs_frontend_get_streaming_output();
-            OBSEncoder enc = obs_output_get_video_encoder(stream_output);
+        if (config_id.empty() || config_id == OBS_STREAMING_ENC_PLACEHOLDER) {
+            OBSOutputAutoRelease out = obs_frontend_get_streaming_output();
             using_main_video_encoder_ = true;
-            return enc.Get();
-        } else if (config_id == OBS_RECORDING_ENC_PLACEHOLDER) {
-            OBSOutputAutoRelease stream_output = obs_frontend_get_recording_output();
-            OBSEncoder enc = obs_output_get_video_encoder(stream_output);
-            using_main_video_encoder_ = true;
-            return enc.Get();
-        } else {
-            OBSEncoderAutoRelease enc = obs_get_encoder_by_name(VideoEncoderName().c_str());
-            if (!enc) {
-                auto& global = GlobalMultiOutputConfig();
-                auto videoConfig = FindById(global.videoConfig, config_id);
-                if (videoConfig) {
-                    OBSDataAutoRelease settings = obs_data_create_from_json(videoConfig->encoderParams.dump().c_str());
-                    enc = obs_video_encoder_create(videoConfig->encoderId.c_str(), VideoEncoderName().c_str(), settings, nullptr);
-                    if (enc) {
-                        auto wh = ParseResolution(videoConfig->resolution);
-                        if (wh.has_value()) {
-                            obs_encoder_set_gpu_scale_type(enc, obs_scale_type::OBS_SCALE_BICUBIC);
-                            auto [w, h] = *wh;
-                            obs_encoder_set_scaled_size(enc, w, h);
-                        }
-                        obs_encoder_set_frame_rate_divisor(enc, videoConfig->fpsDenumerator);
-                    }
-                } else {
-                    assert(false && "No video encoder config found with specified id.");
-                    blog(LOG_ERROR, TAG "Load video encoder config failed for %s. Sharing with main output.", config_->name.c_str());
-                    config_->videoConfig = OBS_STREAMING_ENC_PLACEHOLDER;
-                    return GetVideoEncoder();
-                }
-            }
-
-            using_main_video_encoder_ = false;
-            return enc.Get();
+            return obs_output_get_video_encoder(out);
         }
+        if (config_id == OBS_RECORDING_ENC_PLACEHOLDER) {
+            OBSOutputAutoRelease out = obs_frontend_get_recording_output();
+            using_main_video_encoder_ = true;
+            return obs_output_get_video_encoder(out);
+        }
+        OBSEncoderAutoRelease enc = obs_get_encoder_by_name(VideoEncoderName().c_str());
+        if (!enc) {
+            auto vcfg = FindById(GlobalMultiOutputConfig().videoConfig, config_id);
+            if (vcfg) {
+                OBSDataAutoRelease s = obs_data_create_from_json(vcfg->encoderParams.dump().c_str());
+                enc = obs_video_encoder_create(vcfg->encoderId.c_str(), VideoEncoderName().c_str(), s, nullptr);
+                if (enc) {
+                    auto wh = ParseResolution(vcfg->resolution);
+                    if (wh) {
+                        obs_encoder_set_gpu_scale_type(enc, OBS_SCALE_BICUBIC);
+                        auto [w,h] = *wh;
+                        obs_encoder_set_scaled_size(enc, w, h);
+                    }
+                    obs_encoder_set_frame_rate_divisor(enc, vcfg->fpsDenumerator);
+                }
+            } else {
+                blog(LOG_ERROR, TAG "No video encoder config found.");
+                config_->videoConfig = OBS_STREAMING_ENC_PLACEHOLDER;
+                return GetVideoEncoder();
+            }
+        }
+        using_main_video_encoder_ = false;
+        return enc.Get();
     }
 
-    OBSEncoder GetAudioEncoder(int trackIdx = 0, std::optional<int> mixerId = std::nullopt) {
+    OBSEncoder GetAudioEncoder(int trackIdx = 0, std::optional<int> mixerId = std::nullopt)
+    {
         auto config_id = config_->audioConfig.value_or(OBS_STREAMING_ENC_PLACEHOLDER);
-        if (config_id == "" || config_id == OBS_STREAMING_ENC_PLACEHOLDER) {
-            OBSOutputAutoRelease stream_output = obs_frontend_get_streaming_output();
-            OBSEncoder enc = obs_output_get_audio_encoder(stream_output, 0);
+        if (config_id.empty() || config_id == OBS_STREAMING_ENC_PLACEHOLDER) {
+            OBSOutputAutoRelease out = obs_frontend_get_streaming_output();
             using_main_audio_encoder_ = true;
-            return enc.Get();
-        } else if (config_id == OBS_RECORDING_ENC_PLACEHOLDER) {
-            OBSOutputAutoRelease stream_output = obs_frontend_get_recording_output();
-            OBSEncoder enc = obs_output_get_audio_encoder(stream_output, 0);
-            using_main_audio_encoder_ = true;
-            return enc.Get();
-        } else {
-            OBSEncoderAutoRelease enc = obs_get_encoder_by_name(AudioEncoderName(trackIdx).c_str());
-            if (!enc) {
-                auto& global = GlobalMultiOutputConfig();
-                auto audioConfigId = *config_->audioConfig;
-                auto audioConfig = FindById(global.audioConfig, audioConfigId);
-                if (audioConfig) {
-                    OBSDataAutoRelease settings = obs_data_create_from_json(audioConfig->encoderParams.dump().c_str());
-
-                    // If we were provided with a mixerId, override the audioConfig's mixerId with it
-                    int defaultMixerId = audioConfig->mixerId;
-                    if (auto overrideMixerId = mixerId) {
-                        defaultMixerId = *overrideMixerId;
-                    }
-
-                    enc = obs_audio_encoder_create(audioConfig->encoderId.c_str(), AudioEncoderName(trackIdx).c_str(), settings, defaultMixerId, nullptr);
-                } else {
-                    assert(false && "No audio encoder config found with specified id.");
-                    blog(LOG_ERROR, TAG "Load audio encoder config failed for %s. Sharing with main output.", config_->name.c_str());
-                    config_->audioConfig = OBS_STREAMING_ENC_PLACEHOLDER;
-                    return GetAudioEncoder();
-                }
-            }
-            
-            using_main_audio_encoder_ = false;
-            return enc.Get();
+            return obs_output_get_audio_encoder(out, 0);
         }
+        if (config_id == OBS_RECORDING_ENC_PLACEHOLDER) {
+            OBSOutputAutoRelease out = obs_frontend_get_recording_output();
+            using_main_audio_encoder_ = true;
+            return obs_output_get_audio_encoder(out, 0);
+        }
+        OBSEncoderAutoRelease enc = obs_get_encoder_by_name(AudioEncoderName(trackIdx).c_str());
+        if (!enc) {
+            auto acfg = FindById(GlobalMultiOutputConfig().audioConfig, *config_->audioConfig);
+            if (acfg) {
+                OBSDataAutoRelease s = obs_data_create_from_json(acfg->encoderParams.dump().c_str());
+                int mid = mixerId.value_or(acfg->mixerId);
+                enc = obs_audio_encoder_create(acfg->encoderId.c_str(), AudioEncoderName(trackIdx).c_str(), s, mid, nullptr);
+            } else {
+                blog(LOG_ERROR, TAG "No audio encoder config found.");
+                config_->audioConfig = OBS_STREAMING_ENC_PLACEHOLDER;
+                return GetAudioEncoder();
+            }
+        }
+        using_main_audio_encoder_ = false;
+        return enc.Get();
     }
 
     bool PrepareOutputEncoders()
     {
-        if (!output_) {
-            blog(LOG_ERROR, TAG "Prepare output encoder before output object is created.");
-            return false;
-        }
-        
+        if (!output_) return false;
         ReleaseOutputEncoder();
-
-        auto& global = GlobalMultiOutputConfig();
-
-        // main output
-        OBSOutput mainOutput = obs_frontend_get_streaming_output();
-        OBSOutput recordingOutput =  obs_frontend_get_recording_output();
-
-        obs_output_release(mainOutput);
-        obs_output_release(recordingOutput);
 
         OBSEncoder venc = GetVideoEncoder();
         OBSEncoder aenc = GetAudioEncoder();
 
         std::vector<std::tuple<int, OBSEncoder>> additionalTracks;
         if (auto audioConfigId = config_->audioConfig) {
-            auto audioConfig = FindById(global.audioConfig, *audioConfigId);
-
-            if (!audioConfig) {
-                blog(LOG_ERROR, TAG "Load audio encoder config failed for %s. Could not determine additional tracks.", config_->name.c_str());
-            } else {
-                additionalTracks.reserve(audioConfig->audioTracks.size());
-                for (auto& track : audioConfig->audioTracks) {
+            auto acfg = FindById(GlobalMultiOutputConfig().audioConfig, *audioConfigId);
+            if (acfg) {
+                for (auto& track : acfg->audioTracks) {
                     OBSEncoder enc = GetAudioEncoder(track->output_track, track->mixer_track);
-                    if (enc) {
-                        // Record the output track index and the encoder for later when we set the encoders on the output
-                        additionalTracks.push_back({ track->output_track, enc });
-                    }
+                    if (enc) additionalTracks.push_back({ track->output_track, enc });
                 }
             }
         }
 
         if (!aenc || !venc) {
-            // If we don't have a valid encoder, we're likely using a special encoder type that
-            // needs to be started by the user (i.e. start streaming or start recording)
             ReleaseOutputEncoder();
-
-            auto msgbox = new QMessageBox(QMessageBox::Icon::Critical, 
-                obs_module_text("Notice.Title"), 
-                obs_module_text("Notice.GetEncoder"),
-                QMessageBox::StandardButton::Ok,
-                this
-                );
-            msgbox->exec();
+            blog(LOG_ERROR, TAG "Failed to get encoders for kxtsune-ingest.");
             return false;
         }
 
         obs_output_set_audio_encoder(output_, obs_encoder_get_ref(aenc), 0);
-        for (auto& track : additionalTracks) {
-            auto trackIdx = std::get<0>(track);
-            auto enc = std::get<1>(track);
-            obs_output_set_audio_encoder(output_, obs_encoder_get_ref(enc), trackIdx);
-        }
+        for (auto& [idx, enc] : additionalTracks)
+            obs_output_set_audio_encoder(output_, obs_encoder_get_ref(enc), idx);
         obs_output_set_video_encoder(output_, obs_encoder_get_ref(venc));
-
         return true;
     }
 
-
     bool ReleaseOutputEncoder()
     {
-        if (!output_)
-            return true;
-        else if (obs_output_active(output_) == false)
-        {
-            auto venc = obs_output_get_video_encoder(output_);
-            if (venc)
-            {
-                obs_output_set_video_encoder(output_, nullptr);
-                obs_encoder_release(venc);
-            }
-            
-            auto aenc = obs_output_get_audio_encoder(output_, 0);
-            if (aenc)
-            {
-                obs_output_set_audio_encoder(output_, nullptr, 0);
-                obs_encoder_release(aenc);
-            }
-
-            return true;
-        }
-        else {
-            blog(LOG_ERROR, TAG "Release output while it is active.");
+        if (!output_) return true;
+        if (obs_output_active(output_)) {
+            blog(LOG_ERROR, TAG "Release encoder while output is active.");
             return false;
         }
+        auto venc = obs_output_get_video_encoder(output_);
+        if (venc) { obs_output_set_video_encoder(output_, nullptr); obs_encoder_release(venc); }
+        auto aenc = obs_output_get_audio_encoder(output_, 0);
+        if (aenc) { obs_output_set_audio_encoder(output_, nullptr, 0); obs_encoder_release(aenc); }
+        return true;
     }
-
 
     bool ReleaseOutput()
     {
-        if (output_) {
-            DisconnectSignals(output_);
-        }
-
-        if (output_ && obs_output_active(output_)) {
-            obs_output_force_stop(output_);
-        }
-
-        if (output_ && obs_output_active(output_) == false)
-        {
-            bool ret = ReleaseOutputService();
-            ret = ReleaseOutputEncoder() && ret;
-
+        if (output_) DisconnectSignals(output_);
+        if (output_ && obs_output_active(output_)) obs_output_force_stop(output_);
+        if (output_ && !obs_output_active(output_)) {
+            ReleaseOutputService();
+            ReleaseOutputEncoder();
             obs_output_release(output_);
             output_ = nullptr;
-
-            ret = ReleaseOutputSceneView() && ret;
-
-            return ret;
-        }
-        else if (output_) {
+            ReleaseOutputSceneView();
+        } else if (output_) {
             obs_output_release(output_);
             output_ = nullptr;
-
-            return true;
         }
-        else if (output_ == nullptr)
-            return true;
-        else
-            return false;
+        return true;
     }
 
+    // ── streaming status update (timer tick) ─────────────────────────────────
 
-    void UpdateStreamStatus() {
+    void UpdateStreamStatus()
+    {
+        if (!output_) return;
+
+        static const char* units[] = { "bps","Kbps","Mbps","Gbps","Tbps","Pbps","Ebps","Zbps","Ybps" };
         using namespace std::chrono;
 
-        if (!output_)
-            return;
-
-        static const char* units[] = {
-            "bps", "Kbps", "Mbps", "Gbps", "Tbps", "Pbps", "Ebps", "Zbps", "Ybps"
-        };
-
-        auto new_bytes = obs_output_get_total_bytes(output_);
+        auto new_bytes  = obs_output_get_total_bytes(output_);
         auto new_frames = obs_output_get_total_frames(output_);
         auto now = clock::now();
+        auto interval = duration_cast<duration<double>>(now - last_info_time_).count();
 
-        auto interval = std::chrono::duration_cast<std::chrono::duration<double>>(now - last_info_time_).count();
-        if (interval > 0)
-        {
-            auto duration = now - begin_time_;
-            auto hh = duration_cast<hours>(duration);
-            duration -= hh;
-            auto mm = duration_cast<minutes>(duration);
-            duration -= mm;
-            auto ss = duration_cast<seconds>(duration);
-            duration -= ss;
+        if (interval > 0) {
+            auto dur = now - begin_time_;
+            auto hh = duration_cast<hours>(dur);   dur -= hh;
+            auto mm = duration_cast<minutes>(dur);  dur -= mm;
+            auto ss = duration_cast<seconds>(dur);
 
-            char strDuration[64] = { 0 };
-            snprintf(strDuration, sizeof(strDuration), "%02d:%02d:%02d", (int)hh.count(), (int)mm.count(), (int)ss.count());
+            char strDur[64];
+            snprintf(strDur, sizeof(strDur), "%02d:%02d:%02d", (int)hh.count(), (int)mm.count(), (int)ss.count());
 
-            char strFps[32] = { 0 };
-            snprintf(strFps, sizeof(strFps), "%d FPS", static_cast<int>(std::round((new_frames - total_frames_) / interval)));
+            char strFps[32];
+            snprintf(strFps, sizeof(strFps), "%d FPS",
+                     (int)std::round((new_frames - total_frames_) / interval));
 
-            auto bps = (new_bytes - total_bytes_) * 8 / interval;
-            auto strBps = [&]()-> std::string {
-                if (bps > 0)
-                {
-                    int unitMaxIndex = sizeof(units) / sizeof(*units);
-                    int unitIndex = static_cast<int>(log10(bps) / 3);
-                    if (unitIndex >= unitMaxIndex)
-                        unitIndex = unitMaxIndex - 1;
-                    auto strVal = std::to_string(bps / pow(1000, unitIndex)).substr(0, 4);
-                    if (!strVal.empty() && strVal.back() == '.')
-                        strVal.pop_back();
-                    return strVal + " " + units[unitIndex];
-                }
-                else
-                {
-                    return "0 bps";
-                }
-            }();
-            
-            msg_->setText((std::string(strDuration) + "  " + strBps + "  " + strFps).c_str());
+            auto bps = (new_bytes - total_bytes_) * 8.0 / interval;
+            std::string strBps;
+            if (bps > 0) {
+                int maxUnit = (int)(sizeof(units)/sizeof(*units));
+                int ui = std::min((int)(log10(bps) / 3), maxUnit - 1);
+                auto s = std::to_string(bps / pow(1000, ui)).substr(0, 4);
+                if (!s.empty() && s.back() == '.') s.pop_back();
+                strBps = s + " " + units[ui];
+            } else {
+                strBps = "0 bps";
+            }
+
+            NotifyStatus(std::string("● Live — ") + strDur + "  " + strBps + "  " + strFps);
         }
 
         total_frames_ = new_frames;
-        total_bytes_ = new_bytes;
+        total_bytes_  = new_bytes;
         last_info_time_ = now;
     }
 
 public:
-    PushWidgetImpl(const std::string& targetid, QWidget* parent = 0)
-        : QWidget(parent)
+    PushWidgetImpl(const std::string& targetid, QObject* parent = nullptr)
+        : QObject(parent)
         , targetid_(targetid)
     {
-        QObject::setObjectName("push-widget");
-
         auto& global = GlobalMultiOutputConfig();
         config_ = FindById(global.targets, targetid_);
-        if (!config_)
-            return;
+        if (!config_) return;
 
         timer_ = new QTimer(this);
-        timer_->setInterval(std::chrono::milliseconds(1000));
+        timer_->setInterval(1000);
         QObject::connect(timer_, &QTimer::timeout, [this]() {
             UpdateStreamStatus();
         });
-
-        auto layout = new QGridLayout(this);
-        layout->addWidget(name_ = new QLabel(obs_module_text("NewStreaming"), this), 0, 0, 1, 3);
-        layout->addWidget(btn_ = new QPushButton(obs_module_text("Btn.Start"), this), 1, 0);
-        QObject::connect(btn_, &QPushButton::clicked, [this]() {
-            StartStop();
-        });
-
-        layout->addWidget(edit_btn_ = new QPushButton(obs_module_text("Btn.Edit"), this), 1, 1);
-        QObject::connect(edit_btn_, &QPushButton::clicked, [this]() {
-            ShowEditDlg();
-        });
-
-        layout->addWidget(remove_btn_ = new QPushButton(obs_module_text("Btn.Delete"), this), 1, 2);
-
-        layout->addWidget(msg_ = new QLabel(u8"", this), 2, 0, 1, 3);
-        msg_->setWordWrap(true);
-        layout->addItem(new QSpacerItem(0, 10), 3, 0);
-        setLayout(layout);
-
-        LoadConfig();
     }
-    
-    ~PushWidgetImpl()
+
+    ~PushWidgetImpl() override
     {
+        if (timer_) timer_->stop();
         ReleaseOutput();
     }
 
+    void SetStatusCallback(StatusCallback cb) override {
+        statusCallback_ = std::move(cb);
+    }
 
-    void StartStreaming() override {
-        if (IsRunning())
+    bool IsRunning() override {
+        return output_ != nullptr && obs_output_active(output_);
+    }
+
+    void StartStreaming() override
+    {
+        if (IsRunning()) return;
+        if (!config_) return;
+
+        // Guard: do not attempt to stream without a key
+        if (config_->streamKey.empty()) {
+            blog(LOG_INFO, TAG "StartStreaming skipped — no stream key set.");
+            NotifyStatus("No detection key set.");
             return;
+        }
 
-        // recreate output
+        // Ensure serviceParam has the current key
+        config_->serviceParam["key"] = config_->streamKey;
+
         ReleaseOutput();
 
-        if (output_ == nullptr)
-        {
-            obs_data* output_settings = obs_data_create_from_json(config_->outputParam.dump().c_str());
-
+        if (!output_) {
+            OBSDataAutoRelease settings = obs_data_create_from_json(config_->outputParam.dump().c_str());
             auto protocolInfo = GetProtocolInfos()->GetInfo(config_->protocol.c_str());
-            assert(protocolInfo);
             if (!protocolInfo) {
-	        	blog(LOG_ERROR, TAG "Invalid protocol \"%s\", maybe broken config file.", config_->protocol.c_str());
-	        	protocolInfo = GetProtocolInfos()->GetList();
-	        }
-            auto output_id = protocolInfo->outputId;
-
-            blog(LOG_DEBUG, "Streaming to output: %s", output_id);
-
-            output_ = obs_output_create(output_id, "multi-output", output_settings, nullptr);
+                blog(LOG_ERROR, TAG "Invalid protocol \"%s\"", config_->protocol.c_str());
+                return;
+            }
+            output_ = obs_output_create(protocolInfo->outputId, "multi-output", settings, nullptr);
             SetMeAsHandler(output_);
         }
 
         if (output_) {
             isUseDelay_ = false;
-
             auto profileConfig = obs_frontend_get_profile_config();
             if (profileConfig) {
-                bool useDelay = config_get_bool(profileConfig, "Output", "DelayEnable");
-                bool preserveDelay = config_get_bool(profileConfig, "Output", "DelayPreserve");
-                int delaySec = config_get_int(profileConfig, "Output", "DelaySec");
+                bool useDelay     = config_get_bool(profileConfig, "Output", "DelayEnable");
+                bool preserveDly  = config_get_bool(profileConfig, "Output", "DelayPreserve");
+                int  delaySec     = config_get_int (profileConfig, "Output", "DelaySec");
                 obs_output_set_delay(output_,
                     useDelay ? delaySec : 0,
-                    preserveDelay ? OBS_OUTPUT_DELAY_PRESERVE : 0
-                );
-
-                if (useDelay && delaySec > 0)
-                    isUseDelay_ = true;
+                    preserveDly ? OBS_OUTPUT_DELAY_PRESERVE : 0);
+                if (useDelay && delaySec > 0) isUseDelay_ = true;
             }
         }
 
-        if (!PrepareOutputService())
-        {
-            SetMsg(obs_module_text("Error.CreateRtmpService"));
+        if (!PrepareOutputService()) {
+            NotifyStatus("Error: could not create RTMP service.");
             return;
         }
-
-        if (!PrepareOutputEncoders())
-        {
-            SetMsg(obs_module_text("Error.CreateEncoder"));
+        if (!PrepareOutputEncoders()) {
+            NotifyStatus("Error: could not create encoder.");
             return;
         }
-
-        if (!PrepareEncoderSource())
-        {
-            SetMsg(obs_module_text("Error.SceneNotExist"));
+        if (!PrepareEncoderSource()) {
+            NotifyStatus("Error: scene not found.");
             return;
         }
-
-        if (!obs_output_start(output_))
-        {
-            SetMsg(obs_module_text("Error.StartOutput"));
+        if (!obs_output_start(output_)) {
+            NotifyStatus("Error: failed to start output.");
         }
     }
 
-    void StopStreaming() override {
-        if (!IsRunning())
-            return;
-        
-        bool useForce = false;
-        if (isUseDelay_) {
-            auto res = QMessageBox(QMessageBox::Icon::Information,
-                "?",
-                obs_module_text("Ques.DropDelay"),
-                QMessageBox::StandardButton::Yes | QMessageBox::StandardButton::No,
-                this
-            ).exec();
-            if (res == QMessageBox::Yes)
-                useForce = true;
-        }
-
-        if (!useForce)
-            obs_output_stop(output_);
-        else
-            obs_output_force_stop(output_);
+    void StopStreaming() override
+    {
+        if (!IsRunning()) return;
+        obs_output_stop(output_);
     }
-   
+
     void OnOBSEvent(obs_frontend_event ev) override
     {
-        if (ev == obs_frontend_event::OBS_FRONTEND_EVENT_EXIT
-            || ev == obs_frontend_event::OBS_FRONTEND_EVENT_PROFILE_CHANGED
-            || ev == obs_frontend_event::OBS_FRONTEND_EVENT_PROFILE_LIST_CHANGED
-        ) {
-            Stop();
-        } else if (ev == obs_frontend_event::OBS_FRONTEND_EVENT_STREAMING_STARTING) {
-            if (!IsRunning() && config_->syncStart) {
-                StartStop();
-            }
-        } else if (ev == obs_frontend_event::OBS_FRONTEND_EVENT_STREAMING_STOPPING) {
-            if (IsRunning() && config_->syncStop) {
-                StartStop();
-            }
-        }
-    }
-
-    void LoadConfig()
-    {
-        name_->setText(QString::fromUtf8(config_->name));
-    }
-
-    void ResetInfo()
-    {
-        total_frames_ = 0;
-        total_bytes_ = 0;
-        last_info_time_ = clock::now();
-        msg_->setText("");
-    }
-
-    bool IsRunning()
-    {
-        return output_ != nullptr && obs_output_active(output_); 
-    }
-
-    void StartStop()
-    {
-        if (IsRunning())
+        if (ev == OBS_FRONTEND_EVENT_EXIT
+         || ev == OBS_FRONTEND_EVENT_PROFILE_CHANGED
+         || ev == OBS_FRONTEND_EVENT_PROFILE_LIST_CHANGED)
         {
-            StopStreaming();
-            return;
+            if (IsRunning()) obs_output_force_stop(output_);
         }
-
-        StartStreaming();
-    }
-
-    void Stop()
-    {
-        if (IsRunning())
+        else if (ev == OBS_FRONTEND_EVENT_STREAMING_STARTING)
         {
-            obs_output_force_stop(output_);
+            if (!IsRunning() && config_ && config_->syncStart && config_->enabled)
+                StartStreaming();
         }
-    }
-
-    bool ShowEditDlg() override
-    {
-        std::unique_ptr<EditOutputWidget> dlg{ createEditOutputWidget(targetid_, (QMainWindow*)obs_frontend_get_main_window()) };
-
-        if (dlg->exec() == QDialog::DialogCode::Accepted)
+        else if (ev == OBS_FRONTEND_EVENT_STREAMING_STOPPING)
         {
-            SaveMultiOutputConfig();
-            LoadConfig();
-            return true;
+            if (IsRunning() && config_ && config_->syncStop)
+                StopStreaming();
         }
-        else
-            return false;
     }
 
-    void SetMsg(QString msg)
-    {
-        msg_->setText(msg);
-        msg_->setToolTip(msg);
-    }
+    // ── IOBSOutputEventHandler ────────────────────────────────────────────────
 
-    // obs logical
     void OnStarting() override
     {
         GetGlobalService().RunInUIThread([this]() {
             begin_time_ = clock::now();
-            remove_btn_->setEnabled(false);
-            btn_->setText(obs_module_text("Status.Stop"));
-            btn_->setEnabled(true);
-            SetMsg(obs_module_text("Status.Connecting"));
-            remove_btn_->setEnabled(false);
+            NotifyStatus(obs_module_text("Status.Connecting"));
         });
     }
 
     void OnStarted() override
     {
         GetGlobalService().RunInUIThread([this]() {
-            remove_btn_->setEnabled(false);
-            btn_->setText(obs_module_text("Status.Stop"));
-            btn_->setEnabled(true);
-            SetMsg(obs_module_text("Status.Streaming"));
-
-            ResetInfo();
+            total_frames_ = 0; total_bytes_ = 0;
+            last_info_time_ = clock::now();
+            NotifyStatus(obs_module_text("Status.Streaming"));
             timer_->start();
         });
     }
@@ -782,23 +539,16 @@ public:
     {
         GetGlobalService().RunInUIThread([this]() {
             timer_->stop();
-
-            remove_btn_->setEnabled(false);
-            btn_->setText(obs_module_text("Status.Stop"));
-            btn_->setEnabled(true);
-            SetMsg(obs_module_text("Status.Reconnecting"));
+            NotifyStatus(obs_module_text("Status.Reconnecting"));
         });
     }
 
     void OnReconnected() override
     {
         GetGlobalService().RunInUIThread([this]() {
-            remove_btn_->setEnabled(false);
-            btn_->setText(obs_module_text("Status.Stop"));
-            btn_->setEnabled(true);
-            SetMsg(obs_module_text("Status.Streaming"));
-
-            ResetInfo();
+            total_frames_ = 0; total_bytes_ = 0;
+            last_info_time_ = clock::now();
+            NotifyStatus(obs_module_text("Status.Streaming"));
             timer_->start();
         });
     }
@@ -807,45 +557,21 @@ public:
     {
         GetGlobalService().RunInUIThread([this]() {
             timer_->stop();
-
-            remove_btn_->setEnabled(false);
-            btn_->setText(obs_module_text("Status.Stop"));
-            btn_->setEnabled(true);
-            SetMsg(obs_module_text("Status.Stopping"));
+            NotifyStatus(obs_module_text("Status.Stopping"));
         });
     }
 
     void OnStopped(int code) override
     {
         GetGlobalService().RunInUIThread([this, code]() {
-            ResetInfo();
             timer_->stop();
-
-            remove_btn_->setEnabled(true);
-            btn_->setText(obs_module_text("Btn.Start"));
-            btn_->setEnabled(true);
-            SetMsg(u8"");
-
-            switch(code)
-            {
-                case 0:
-                    SetMsg(u8"");
-                    break;
-                case -1:
-                    SetMsg(obs_module_text("Error.WrongRTMPUrl"));
-                    break;
-                case -2:
-                    SetMsg(obs_module_text("Error.ServerConnect"));
-                    break;
-                case -3:
-                    SetMsg(obs_module_text("Error.ServerHandshake"));
-                    break;
-                case -4:
-                    SetMsg(obs_module_text("Error.ServerRefuse"));
-                    break;
-                default:
-                    SetMsg(obs_module_text("Error.Unknown"));
-                    break;
+            switch (code) {
+            case  0:  NotifyStatus(""); break;
+            case -1:  NotifyStatus(obs_module_text("Error.WrongRTMPUrl")); break;
+            case -2:  NotifyStatus(obs_module_text("Error.ServerConnect")); break;
+            case -3:  NotifyStatus(obs_module_text("Error.ServerHandshake")); break;
+            case -4:  NotifyStatus(obs_module_text("Error.ServerRefuse")); break;
+            default:  NotifyStatus(obs_module_text("Error.Unknown")); break;
             }
         });
 
@@ -854,6 +580,8 @@ public:
     }
 };
 
-PushWidget* createPushWidget(const std::string& targetid, QWidget* parent) {
+#include "push-widget.moc"
+
+PushWidget* createPushWidget(const std::string& targetid, QObject* parent) {
     return new PushWidgetImpl(targetid, parent);
 }

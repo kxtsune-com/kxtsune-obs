@@ -42,6 +42,10 @@ struct OutputTargetConfig {
     bool syncStart = false;
     bool syncStop = false;
 
+    // User-configurable fields persisted to disk
+    std::string streamKey;
+    bool enabled = false;
+
     nlohmann::json serviceParam;
     nlohmann::json outputParam;
 
